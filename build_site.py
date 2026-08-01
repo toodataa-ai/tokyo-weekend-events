@@ -59,7 +59,7 @@ header{{background:linear-gradient(135deg,var(--navy),#2e5e8c);color:#fff;paddin
         position:sticky;top:0;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,.15)}}
 header h1{{margin:0 0 8px;font-size:19px;line-height:1.4}}
 .navlink{{font-size:12px;font-weight:700;color:#fff;background:rgba(255,255,255,.18);padding:4px 10px;
-         border-radius:99px;text-decoration:none;vertical-align:middle}}
+         border-radius:99px;text-decoration:none;vertical-align:middle;border:none;cursor:pointer;font-family:inherit}}
 .navlink:hover{{background:rgba(255,255,255,.3)}}
 .datebar{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
 .datebar input[type=date]{{border:none;border-radius:8px;padding:7px 9px;font-size:13.5px;font-family:inherit}}
@@ -99,7 +99,7 @@ footer{{text-align:center;color:var(--sub);font-size:11.5px;padding:20px 16px 30
 </head>
 <body>
 <header>
-  <h1>&#127961; 東京 週末イベント　<a class="navlink" href="copy.html" target="_blank" rel="noopener">📋 コピペ用リスト</a></h1>
+  <h1>&#127961; 東京 週末イベント　<button class="navlink" onclick="openCopy()">📋 コピペ用リスト</button></h1>
   <div class="datebar">
     <input type="date" id="dateInput" value="{default_date}">
     <button id="updateBtn">この週末を表示</button>
@@ -231,6 +231,17 @@ document.getElementById('updateBtn').addEventListener('click', function(){{
   loadWeekend(saturdayOf(v));
 }});
 
+function openCopy(){{
+  const active = document.querySelector('.chip.active');
+  const area = active ? active.dataset.area : '__all__';
+  const dateVal = document.getElementById('dateInput').value;
+  const p = new URLSearchParams();
+  if(dateVal) p.set('date', dateVal);
+  if(area !== '__all__') p.set('area', area);
+  const qs = p.toString();
+  window.open('copy.html' + (qs ? '?' + qs : ''), '_blank', 'noopener');
+}}
+
 (async function init(){{
   await loadManifest();
   await loadWeekend(document.getElementById('dateInput').value ? saturdayOf(document.getElementById('dateInput').value) : MANIFEST.default);
@@ -254,7 +265,7 @@ header{{background:linear-gradient(135deg,var(--navy),#2e5e8c);color:#fff;paddin
         position:sticky;top:0;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,.15)}}
 header h1{{margin:0 0 8px;font-size:18px;line-height:1.4}}
 .navlink{{font-size:12px;font-weight:700;color:#fff;background:rgba(255,255,255,.18);padding:4px 10px;
-         border-radius:99px;text-decoration:none;vertical-align:middle}}
+         border-radius:99px;text-decoration:none;vertical-align:middle;border:none;cursor:pointer;font-family:inherit}}
 .navlink:hover{{background:rgba(255,255,255,.3)}}
 .datebar{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
 .datebar input[type=date]{{border:none;border-radius:8px;padding:7px 9px;font-size:13.5px;font-family:inherit}}
@@ -300,6 +311,7 @@ footer{{text-align:center;color:var(--sub);font-size:11.5px;padding:20px 16px 30
   <div class="range" id="rangeText"></div>
   <div class="count" id="countText"></div>
   <div class="msg" id="msgBox"></div>
+  <div id="filterInfo" style="display:none;font-size:12px;opacity:.85;margin-top:4px"></div>
 </header>
 <p class="tip">各項目の「コピー」でその1行だけ、カード下の「まとめてコピー」で全項目を改行区切りでコピーできます。</p>
 <main>
@@ -346,15 +358,18 @@ function field(id, labelTxt, value, isLink){{
   </div>`;
 }}
 
+let filterArea = '__all__';
+
 function render(data){{
+  const events = filterArea === '__all__' ? data.events : data.events.filter(ev => ev.area === filterArea);
   document.getElementById('rangeText').textContent = fmtRange(data.sat, data.sun) + ' 開催中・開催';
-  document.getElementById('countText').textContent = `該当 ${{data.events.length}} 件`;
+  document.getElementById('countText').textContent = `該当 ${{events.length}} 件`;
   const grid = document.getElementById('grid');
-  if(data.events.length === 0){{
+  if(events.length === 0){{
     grid.innerHTML = '<p class="empty">この週末に開催されるイベントは見つかりませんでした。</p>';
     return;
   }}
-  grid.innerHTML = data.events.map((ev, idx) => {{
+  grid.innerHTML = events.map((ev, idx) => {{
     const i = idx + 1;
     const title = ev.name || ev.url;
     const venue = ev.venue || ev.area;
@@ -365,6 +380,7 @@ function render(data){{
     const thumb = ev.image
       ? `<img class="thumb" src="${{ev.image}}" alt="" loading="lazy" onerror="this.style.display='none'">`
       : '';
+    const imgField = ev.image ? field('img'+i, '🖼 サムネイル画像URL', ev.image, true) : '';
     return `<div class="card">
       <div class="cardhead">
         ${{thumb}}
@@ -380,7 +396,8 @@ function render(data){{
       ${{field('s'+i, '📝 説明', desc)}}
       ${{field('u'+i, '🔗 公式サイト', official, true)}}
       ${{field('src'+i, '📌 情報元サイト', ev.source||'', true)}}
-      <button class="copyallbtn" onclick="copyAll(${{i}})">この項目をまとめてコピー</button>
+      ${{imgField}}
+      <button class="copyallbtn" onclick="copyAll(${{i}}, ${{!!ev.image}})">この項目をまとめてコピー</button>
     </div>`;
   }}).join('');
 }}
@@ -392,8 +409,9 @@ function copyField(id, btn){{
     setTimeout(()=>{{ btn.textContent = old; btn.classList.remove('done'); }}, 1500);
   }});
 }}
-function copyAll(i){{
+function copyAll(i, hasImg){{
   const ids = ['t'+i, 'v'+i, 'd'+i, 'p'+i, 's'+i, 'u'+i, 'src'+i];
+  if(hasImg) ids.push('img'+i);
   const text = ids.map(id => document.getElementById(id).textContent).join('\\n');
   navigator.clipboard.writeText(text).then(()=>{{
     const btn = event.target; const old = btn.textContent;
@@ -429,7 +447,18 @@ document.getElementById('updateBtn').addEventListener('click', function(){{
 }});
 (async function init(){{
   await loadManifest();
-  await loadWeekend(document.getElementById('dateInput').value ? saturdayOf(document.getElementById('dateInput').value) : MANIFEST.default);
+  const params = new URLSearchParams(window.location.search);
+  const paramArea = params.get('area') || '__all__';
+  const paramDate = params.get('date');
+  filterArea = paramArea;
+  if(paramArea !== '__all__'){{
+    const fi = document.getElementById('filterInfo');
+    fi.textContent = `絞り込み中: ${{paramArea}}`;
+    fi.style.display = 'block';
+  }}
+  if(paramDate) document.getElementById('dateInput').value = paramDate;
+  const satIso = paramDate ? saturdayOf(paramDate) : MANIFEST.default;
+  await loadWeekend(satIso);
 }})();
 </script>
 </body>
