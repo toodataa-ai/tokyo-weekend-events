@@ -4,7 +4,7 @@
 tokyofes.info 配下の各エリアサイトを巡回し、今週末(土・日)開催のイベントを抽出する。
 build_site.py から import して使う。
 """
-import urllib.request, re, os, html, time, datetime
+import urllib.request, urllib.parse, re, os, html, time, datetime
 
 WARDS = {
     "墨田":       "https://www.sumidaevent.com/",
@@ -180,8 +180,16 @@ def fetch_event_detail(url):
     fields = _extract_labeled_fields(text)
     link_raw = fields.get("関連リンク")
     mu = LINK_RE.search(link_raw) if link_raw else None
+    img_url = m_img.group(1) if m_img else None
+    if not img_url:
+        # フォールバック: iterrace.jp 形式 <ul id="status_images"> から画像取得
+        si = re.search(r'<ul[^>]*id="status_images"[^>]*>(.*?)</ul>', page, re.DOTALL)
+        if si:
+            im = re.search(r'src="([^"]+)"', si.group(1))
+            if im:
+                img_url = urllib.parse.urljoin(url, im.group(1).split('?')[0])
     return {
-        "image": m_img.group(1) if m_img else None,
+        "image": img_url,
         "description": (m_desc.group(1).strip() if m_desc else None),
         "time": _trim_note(fields.get("時間")),
         "venue": _trim_note(fields.get("会場")),
