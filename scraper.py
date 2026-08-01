@@ -123,6 +123,86 @@ def fetch_og_image(url):
     m = OG_IMAGE_RE.search(page)
     return m.group(1) if m else None
 
+OGDESC_RE = re.compile(r'<meta[^>]+(?:property|name)=["\'](?:og:description|description)["\'][^>]+content=["\']([^"\']*)["\']', re.I)
+
+# 日程/時間/会場/(入場料)/主催者/関連リンク は同系列サイト共通のラベル付き構造。
+# ※チェーンされた非貪欲(.+?)の正規表現は、ラベルが欠けているページで
+#   破滅的バックトラック(catastrophic backtracking)を起こしCPUを食い潰す危険があるため使わない。
+#   正規表現を使わず、str.find()でラベル位置を順に走査するO(n)の安全な方式にする。
+LABELS_SEQ = ["日程", "時間", "会場", "入場料", "主催者", "関連リンク"]
+WINDOW_SIZE = 1500  # 「日程」から先、この範囲だけを見る(本文中の同名語への誤爆・過大な走査を防ぐ)
+LINK_RE = re.compile(r'https?://\S+')  # 単純な文字クラス+量指定子のみでバックトラック安全
+
+def _flatten(page):
+    t = re.sub(r'<script[\s\S]*?</script>', '', page)
+    t = re.sub(r'<style[\s\S]*?</style>', '', t)
+    t = html.unescape(re.sub(r'<[^>]+>', ' ', t))
+    return re.sub(r'[ \t　]+', ' ', t)
+
+def _trim_note(s):
+    """末尾の「※...」注記を除いてCanva等に貼りやすい短い値にする。"""
+    if not s:
+        return s
+    return s.split("※", 1)[0].strip() or None
+
+def _extract_labeled_fields(text):
+    """日程/時間/会場/入場料/主催者/関連リンク を str.find() だけで順に抽出する。"""
+    idx = text.find("日程")
+    if idx < 0:
+        return {}
+    window = text[idx: idx + WINDOW_SIZE]
+    positions, cursor = [], 0
+    for label in LABELS_SEQ:
+        p = window.find(label, cursor)
+        positions.append(p)
+        if p >= 0:
+            cursor = p + len(label)
+    found = sorted(
+        ((LABELS_SEQ[i], positions[i]) for i in range(len(LABELS_SEQ)) if positions[i] >= 0),
+        key=lambda x: x[1],
+    )
+    values = {}
+    for i, (label, pos) in enumerate(found):
+        start = pos + len(label)
+        end = found[i + 1][1] if i + 1 < len(found) else len(window)
+        values[label] = window[start:end].strip(" :：　")
+    return values
+
+def fetch_event_detail(url):
+    """イベント個別ページから 画像/説明/時間/会場/入場料/公式リンク を抽出する。取得失敗時は空dict。"""
+    try:
+        page = fetch(url)
+    except Exception:
+        return {}
+    text = _flatten(page)
+    m_img = OG_IMAGE_RE.search(page)
+    m_desc = OGDESC_RE.search(page)
+    fields = _extract_labeled_fields(text)
+    link_raw = fields.get("関連リンク")
+    mu = LINK_RE.search(link_raw) if link_raw else None
+    return {
+        "image": m_img.group(1) if m_img else None,
+        "description": (m_desc.group(1).strip() if m_desc else None),
+        "time": _trim_note(fields.get("時間")),
+        "venue": _trim_note(fields.get("会場")),
+        "price": _trim_note(fields.get("入場料")),
+        "official_url": mu.group(0) if mu else None,
+    }
+
+def enrich_details(events, sleep=0.15, log=print):
+    """各イベントに image/description/time/venue/price/official_url を追加する（1回のfetchで全取得）。"""
+    cache = {}
+    for ev in events:
+        url = ev["url"]
+        if url not in cache:
+            cache[url] = fetch_event_detail(url)
+            if sleep:
+                time.sleep(sleep)
+        ev.update(cache[url])
+    n_ok = sum(1 for e in events if e.get("time") or e.get("venue"))
+    log(f"詳細情報取得: {n_ok}/{len(events)} 件（時間/会場のいずれかあり）")
+    return events
+
 def enrich_images(events, sleep=0.15, log=print):
     """各イベントに 'image' キー(サムネイルURL or None) を追加する。"""
     cache = {}
