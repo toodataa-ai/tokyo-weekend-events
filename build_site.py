@@ -9,7 +9,7 @@
 ローカル確認: python build_site.py --open
 """
 import os, json, html, datetime, webbrowser, sys
-from scraper import collect_all_events, enrich_details, filter_weekend, upcoming_saturdays, fmt_period, WARDS
+from scraper import collect_all_events, enrich_details, filter_weekend, upcoming_saturdays, fmt_period, WARDS, ITERRACE_URL
 
 OUTDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "site")
 DATADIR = os.path.join(OUTDIR, "data")
@@ -18,6 +18,7 @@ N_WEEKS = 12  # 事前生成する週数（今週末を含め約3ヶ月分）
 PALETTE = ["2E86AB","3BAA6F","8E5EA8","1BA6C4","D98324","5B6670",
            "C0392B","2E7D57","6C5CE7","E17055","0984E3","B8891F","16324F","D64550","2C3E50"]
 AREA_COLOR = {area: PALETTE[i % len(PALETTE)] for i, area in enumerate(WARDS.keys())}
+AREA_COLOR["練馬（アイテラス）"] = "27AE60"
 
 def build_weekend_json(events, sat, sun):
     return {
@@ -37,6 +38,7 @@ def build_weekend_json(events, sat, sun):
                 "venue": e.get("venue"),
                 "price": e.get("price"),
                 "official_url": e.get("official_url"),
+                "source": e.get("source"),
             }
             for e in events
         ],
@@ -87,6 +89,9 @@ main{{padding:12px;max-width:900px;margin:0 auto}}
 .badge{{color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px}}
 .date{{color:#c0392b;font-size:12px;font-weight:600}}
 .card-name{{font-size:14px;line-height:1.45;font-weight:600}}
+.card-src{{font-size:11px;color:#999;margin-top:5px}}
+.card-src a{{color:#999;text-decoration:none}}
+.card-src a:hover{{text-decoration:underline}}
 .empty{{text-align:center;color:var(--sub);padding:40px 0}}
 .loading{{text-align:center;color:var(--sub);padding:40px 0}}
 footer{{text-align:center;color:var(--sub);font-size:11.5px;padding:20px 16px 30px}}
@@ -108,7 +113,7 @@ footer{{text-align:center;color:var(--sub);font-size:11.5px;padding:20px 16px 30
   <div class="grid" id="grid"><div class="loading">読み込み中...</div></div>
 </main>
 <footer>
-  自動収集（tokyofes.info 配下の各エリアサイト）。日程・開催有無は必ず各公式ページでご確認ください。<br>
+  自動収集（tokyofes.info 各エリアサイト・iterrace.jp 等）。日程・開催有無は必ず各公式ページでご確認ください。<br>
   事前生成データ: 直近{n_weeks}週分（毎週自動更新）／ マニフェスト生成: {generated}
 </footer>
 <script>
@@ -164,11 +169,15 @@ function render(data){{
     grid.innerHTML = '<p class="empty">この週末に開催されるイベントは見つかりませんでした。</p>';
     return;
   }}
+  function srcHost(url){{
+    try{{ return new URL(url).hostname.replace(/^www\\./, ''); }}catch(e){{ return ''; }}
+  }}
   grid.innerHTML = data.events.map(ev => {{
     const c = AREA_COLOR[ev.area] || '2E86AB';
     const thumb = ev.image
       ? `<img class="thumb" src="${{ev.image}}" alt="" loading="lazy" onerror="this.style.display='none'">`
       : `<div class="thumb ph" style="background:#${{c}}"><span>${{(ev.area||'?').slice(0,1)}}</span></div>`;
+    const src = ev.source ? `<div class="card-src">情報元: <a href="${{ev.source}}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${{srcHost(ev.source)}}</a></div>` : '';
     return `<a class="card" data-area="${{ev.area}}" href="${{ev.url}}" target="_blank" rel="noopener">
       ${{thumb}}
       <div class="card-body">
@@ -177,6 +186,7 @@ function render(data){{
           <span class="date">${{ev.period}}</span>
         </div>
         <div class="card-name">${{ev.name || ev.url}}</div>
+        ${{src}}
       </div>
     </a>`;
   }}).join('\\n');
@@ -296,7 +306,7 @@ footer{{text-align:center;color:var(--sub);font-size:11.5px;padding:20px 16px 30
   <div class="grid" id="grid"><div class="loading">読み込み中...</div></div>
 </main>
 <footer>
-  自動収集（tokyofes.info 配下の各エリアサイト）。日程・料金・会場は必ず各公式ページでご確認ください。<br>
+  自動収集（tokyofes.info 各エリアサイト・iterrace.jp 等）。日程・料金・会場は必ず各公式ページでご確認ください。<br>
   事前生成データ: 直近{n_weeks}週分（毎週自動更新）
 </footer>
 <script>
@@ -369,6 +379,7 @@ function render(data){{
       ${{field('p'+i, '💰 料金', price)}}
       ${{field('s'+i, '📝 説明', desc)}}
       ${{field('u'+i, '🔗 公式サイト', official, true)}}
+      ${{field('src'+i, '📌 情報元サイト', ev.source||'', true)}}
       <button class="copyallbtn" onclick="copyAll(${{i}})">この項目をまとめてコピー</button>
     </div>`;
   }}).join('');
@@ -382,7 +393,7 @@ function copyField(id, btn){{
   }});
 }}
 function copyAll(i){{
-  const ids = ['t'+i, 'v'+i, 'd'+i, 'p'+i, 's'+i, 'u'+i];
+  const ids = ['t'+i, 'v'+i, 'd'+i, 'p'+i, 's'+i, 'u'+i, 'src'+i];
   const text = ids.map(id => document.getElementById(id).textContent).join('\\n');
   navigator.clipboard.writeText(text).then(()=>{{
     const btn = event.target; const old = btn.textContent;

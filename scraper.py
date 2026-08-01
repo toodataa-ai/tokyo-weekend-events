@@ -107,7 +107,7 @@ def parse_site(area, base_url, today):
         name = DATE_RE.sub("", text)
         name = name.replace("開催中", "")
         name = re.sub(r'^[\s〜~\-－・･（）()日月火水木金土]+', '', name).strip()
-        events.append({"area": area, "name": name[:80], "url": url, "period": period, "raw": text[:60]})
+        events.append({"area": area, "name": name[:80], "url": url, "period": period, "raw": text[:60], "source": base_url})
     return events
 
 OG_IMAGE_RE = re.compile(
@@ -222,6 +222,64 @@ def fmt_period(p):
     f = lambda d: f"{d.month}/{d.day}" if d else "開催中"
     return f(s) if (s == e) else f"{f(s)}〜{f(e)}"
 
+ITERRACE_URL = "https://www.iterrace.jp/"
+
+def parse_iterrace_day(text, today):
+    """「8/8(土)」「8/22(土)・23(日)」形式の日付を (start, end) に変換する。"""
+    first = re.search(r'(\d{1,2})/(\d{1,2})', text)
+    if not first:
+        return None
+    month = int(first.group(1))
+    all_days = []
+    for m in re.finditer(r'(\d{1,2})/(\d{1,2})|[・~〜]\s*(\d{1,2})\s*\([月火水木金土日]\)', text):
+        if m.group(1):
+            all_days.append(make_date(int(m.group(1)), int(m.group(2)), today))
+        elif m.group(3):
+            all_days.append(make_date(month, int(m.group(3)), today))
+    all_days = [d for d in all_days if d]
+    if not all_days:
+        return None
+    return (min(all_days), max(all_days))
+
+def scrape_iterrace(today=None):
+    """アイテラス落合南長崎のPICK UPセクションからイベントのみ抽出する。"""
+    today = today or datetime.date.today()
+    try:
+        page = fetch(ITERRACE_URL)
+    except Exception as e:
+        print(f"  [警告] アイテラス 取得失敗: {e}")
+        return []
+    section = re.search(r'<ul id="pickup_list_home">(.*?)</ul>', page, re.DOTALL)
+    if not section:
+        return []
+    events = []
+    for item in re.findall(r'<li>(.*?)</li>', section.group(1), re.DOTALL):
+        pic = re.search(r'home_pickup_(\d+)\.png', item)
+        if not pic or pic.group(1) != '0':
+            continue
+        day_m = re.search(r'<div class="day">(.*?)</div>', item, re.DOTALL)
+        link_m = re.search(r'href="([^"]+)"', item)
+        title_m = re.search(r'<a[^>]+>(.*?)</a>', item, re.DOTALL)
+        if not (day_m and link_m and title_m):
+            continue
+        day_text = strip_tags(day_m.group(1))
+        period = parse_iterrace_day(day_text, today)
+        if not period:
+            continue
+        url = link_m.group(1)
+        if not url.startswith('http'):
+            url = ITERRACE_URL.rstrip('/') + '/' + url.lstrip('/')
+        name = strip_tags(title_m.group(1))
+        events.append({
+            "area": "練馬（アイテラス）",
+            "name": name[:80],
+            "url": url,
+            "period": period,
+            "raw": day_text,
+            "source": ITERRACE_URL,
+        })
+    return events
+
 def collect_all_events(today=None, sleep=0.4, log=print):
     """全エリアを1回ずつ巡回し、期間フィルタをかけずに全イベント(重複排除済み)を返す。"""
     today = today or datetime.date.today()
@@ -237,6 +295,13 @@ def collect_all_events(today=None, sleep=0.4, log=print):
         all_events += uniq
         if sleep:
             time.sleep(sleep)
+    # アイテラス落合南長崎
+    iterrace_evs = scrape_iterrace(today)
+    n_new = 0
+    for e in iterrace_evs:
+        if e["url"] not in seen:
+            seen.add(e["url"]); all_events.append(e); n_new += 1
+    log(f"  {'練馬(アイテラス)':6s}: 抽出{len(iterrace_evs):3d}件 / 新規{n_new:3d}件")
     log(f"合計 ユニークイベント: {len(all_events)}件")
     return all_events, today
 
