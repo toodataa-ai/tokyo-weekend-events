@@ -2,9 +2,8 @@ name: Build & Deploy Tokyo Weekend Events
 
 on:
   schedule:
-    # 毎週金曜 09:00 JST(=00:00 UTC) と 毎週土曜 07:00 JST(=金 22:00 UTC) に自動更新
-    - cron: "0 0 * * 5"
-    - cron: "0 22 * * 5"
+    # 毎週月曜 13:00 JST(=04:00 UTC) に自動更新
+    - cron: "0 4 * * 1"
   workflow_dispatch: {}   # 手動実行ボタン
   push:
     branches: [main]
