@@ -113,12 +113,20 @@ function fmtRange(sat, sun){{
   return `${{s.getFullYear()}}/${{s.getMonth()+1}}/${{s.getDate()}}(${{w[s.getDay()]}}) 〜 ${{e.getMonth()+1}}/${{e.getDate()}}(${{w[e.getDay()]}})`;
 }}
 
+function isoLocal(d){{
+  const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,'0'), day = String(d.getDate()).padStart(2,'0');
+  return `${{y}}-${{m}}-${{day}}`;
+}}
+
 function saturdayOf(dateStr){{
-  const d = new Date(dateStr+'T00:00:00');
-  const wd = d.getDay();
-  let diff = (wd === 6) ? 0 : (wd === 0) ? -1 : (6 - wd);
-  const sat = new Date(d); sat.setDate(d.getDate()+diff);
-  return sat.toISOString().slice(0,10);
+  // dateStr(YYYY-MM-DD)をローカル日付として解釈し、その週の土曜日をローカル日付基準で返す
+  // (toISOString()はUTC変換されるため、JST等UTCより進んだTZで日付がズレるバグを避ける)
+  const [y,m,d] = dateStr.split('-').map(Number);
+  const base = new Date(y, m-1, d);
+  const wd = base.getDay();
+  const diff = (wd === 6) ? 0 : (wd === 0) ? -1 : (6 - wd);
+  const sat = new Date(y, m-1, d + diff);
+  return isoLocal(sat);
 }}
 
 function showMsg(text){{
