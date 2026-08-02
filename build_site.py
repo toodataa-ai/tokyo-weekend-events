@@ -177,7 +177,7 @@ function render(data){{
     const thumb = ev.image
       ? `<img class="thumb" src="${{ev.image}}" alt="" loading="lazy" onerror="this.style.display='none'">`
       : `<div class="thumb ph" style="background:#${{c}}"><span>${{(ev.area||'?').slice(0,1)}}</span></div>`;
-    const src = ev.source ? `<div class="card-src">情報元: <a href="${{ev.source}}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${{srcHost(ev.source)}}</a></div>` : '';
+    const src = ev.source ? `<div class="card-src">情報元: ${{srcHost(ev.source)}}</div>` : '';
     return `<a class="card" data-area="${{ev.area}}" href="${{ev.url}}" target="_blank" rel="noopener">
       ${{thumb}}
       <div class="card-body">
