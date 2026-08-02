@@ -1,12 +1,9 @@
-name: Build & Deploy Tokyo Weekend Events
+name: Deploy Tokyo Weekend Events
 
 on:
-  schedule:
-    # 毎週月曜 13:00 JST(=04:00 UTC) に自動更新
-    - cron: "0 4 * * 1"
-  workflow_dispatch: {}   # 手動実行ボタン
   push:
     branches: [main]
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -18,25 +15,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Build site
-        run: python build_site.py
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: site
-
   deploy:
-    needs: build
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
       - id: deployment
         uses: actions/deploy-pages@v4
