@@ -22,7 +22,12 @@ header h1{margin:0 0 8px;font-size:19px;line-height:1.4}
 .datebar button:active{transform:scale(.97)}
 .range{font-size:12.5px;opacity:.9;margin-top:8px}
 .count{font-size:12px;opacity:.85;margin-top:4px}
-.msg{font-size:12.5px;background:#fff3cd;color:#7a5c1e;padding:6px 10px;border-radius:8px;margin-top:8px;display:none}
+.meta{font-size:11.5px;opacity:.75;margin-top:3px}
+.msg{font-size:12.5px;background:#fff3cd;color:#7a5c1e;padding:6px 10px;border-radius:8px;margin-top:8px;
+     display:none;align-items:center;gap:8px;flex-wrap:wrap}
+.retry-btn{flex:0 0 auto;border:none;background:#7a5c1e;color:#fff;border-radius:6px;
+           padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit}
+.retry-btn:active{opacity:.8}
 .chips{display:flex;gap:6px;overflow-x:auto;padding:10px 12px;background:#fff;
        border-bottom:1px solid #e3e6ea;-webkit-overflow-scrolling:touch}
 .chips::-webkit-scrollbar{display:none}
@@ -49,30 +54,37 @@ main{padding:12px;max-width:900px;margin:0 auto}
 .empty{text-align:center;color:var(--sub);padding:40px 0}
 .loading{text-align:center;color:var(--sub);padding:40px 0}
 footer{text-align:center;color:var(--sub);font-size:11.5px;padding:20px 16px 30px}
+.visitor-stats{margin-bottom:6px;font-size:12px}
 </style>
 </head>
 <body>
 <header>
   <h1>&#127961; 東京 週末イベント　<button class="navlink" onclick="openCopy()">📋 コピペ用リスト</button></h1>
   <div class="datebar">
-    <input type="date" id="dateInput" value="2026-08-01">
+    <input type="date" id="dateInput">
     <button id="updateBtn">この週末を表示</button>
   </div>
   <div class="range" id="rangeText"></div>
   <div class="count" id="countText"></div>
-  <div class="msg" id="msgBox"></div>
+  <div class="meta" id="metaText"></div>
+  <div class="msg" id="msgBox">
+    <span id="msgText"></span>
+    <button class="retry-btn" id="retryBtn" style="display:none" onclick="retryLoad()">もう一度試す</button>
+  </div>
 </header>
 <nav class="chips" id="chips"></nav>
 <main>
   <div class="grid" id="grid"><div class="loading">読み込み中...</div></div>
 </main>
 <footer>
+  <div id="visitorText" class="visitor-stats"></div>
   自動収集（tokyofes.info 各エリアサイト・iterrace.jp 等）。日程・開催有無は必ず各公式ページでご確認ください。<br>
-  事前生成データ: 直近12週分（毎週自動更新）／ マニフェスト生成: 2026-08-02T09:04
+  事前生成データ: 直近12週分（毎週自動更新）
 </footer>
 <script>
 const AREA_COLOR = {"墨田": "2E86AB", "浅草": "3BAA6F", "上野公園": "8E5EA8", "秋葉原": "1BA6C4", "日比谷公園": "D98324", "池袋": "5B6670", "新宿": "C0392B", "中野": "2E7D57", "代々木公園": "6C5CE7", "渋谷": "E17055", "六本木": "0984E3", "豊洲": "B8891F", "お台場": "16324F", "品川": "D64550", "立川": "2C3E50", "練馬（アイテラス）": "27AE60"};
 let MANIFEST = null;
+let lastSatIso = null;
 
 function fmtRange(sat, sun){
   const s = new Date(sat+'T00:00:00'), e = new Date(sun+'T00:00:00');
@@ -85,9 +97,16 @@ function isoLocal(d){
   return `${y}-${m}-${day}`;
 }
 
+// 土日は当日、それ以外は次の土曜日を返す
+function defaultDate(){
+  const t = new Date();
+  const wd = t.getDay();
+  if(wd === 6 || wd === 0) return isoLocal(t);
+  const diff = 6 - wd;
+  return isoLocal(new Date(t.getFullYear(), t.getMonth(), t.getDate() + diff));
+}
+
 function saturdayOf(dateStr){
-  // dateStr(YYYY-MM-DD)をローカル日付として解釈し、その週の土曜日をローカル日付基準で返す
-  // (toISOString()はUTC変換されるため、JST等UTCより進んだTZで日付がズレるバグを避ける)
   const [y,m,d] = dateStr.split('-').map(Number);
   const base = new Date(y, m-1, d);
   const wd = base.getDay();
@@ -96,10 +115,53 @@ function saturdayOf(dateStr){
   return isoLocal(sat);
 }
 
-function showMsg(text){
+function showMsg(text, showRetry){
   const box = document.getElementById('msgBox');
-  if(!text){ box.style.display='none'; box.textContent=''; return; }
-  box.style.display='block'; box.textContent = text;
+  if(!text){ box.style.display='none'; document.getElementById('msgText').textContent=''; return; }
+  box.style.display='flex';
+  document.getElementById('msgText').textContent = text;
+  document.getElementById('retryBtn').style.display = showRetry ? '' : 'none';
+}
+
+function retryLoad(){
+  if(lastSatIso) loadWeekend(lastSatIso);
+}
+
+function showMeta(manifest){
+  const total = manifest.weekends.reduce((s,w) => s + (w.count || 0), 0);
+  document.getElementById('metaText').textContent =
+    `最終更新: ${manifest.generated} ／ 登録イベント: ${total}件（全期間合計）`;
+}
+
+async function updateVisitorCount(){
+  const today = isoLocal(new Date());
+  const lastVisitDate = localStorage.getItem('twe_visit_date');
+  const isNewDay = lastVisitDate !== today;
+
+  // 当日カウント（デバイスごと・1日1カウント）
+  let todayCount = parseInt(localStorage.getItem('twe_today_count') || '0', 10);
+  todayCount = isNewDay ? 1 : todayCount + 1;
+  localStorage.setItem('twe_visit_date', today);
+  localStorage.setItem('twe_today_count', String(todayCount));
+
+  // 累計カウント: counterapi.dev（新規日なら+1、同日はキャッシュ値を表示）
+  let cumulativeStr = localStorage.getItem('twe_cumulative_cache') || '---';
+  try{
+    const endpoint = isNewDay
+      ? 'https://api.counterapi.dev/v1/toodataa-ai/tokyo-weekend-events/up'
+      : 'https://api.counterapi.dev/v1/toodataa-ai/tokyo-weekend-events';
+    const res = await fetch(endpoint, {cache:'no-store'});
+    if(res.ok){
+      const data = await res.json();
+      if(data.count != null){
+        cumulativeStr = data.count.toLocaleString();
+        localStorage.setItem('twe_cumulative_cache', cumulativeStr);
+      }
+    }
+  }catch(e){}
+
+  document.getElementById('visitorText').textContent =
+    `来訪者数: 累計 ${cumulativeStr}人 ／ 本日 ${todayCount}人`;
 }
 
 function render(data){
@@ -163,20 +225,27 @@ async function loadManifest(){
 }
 
 async function loadWeekend(satIso){
+  lastSatIso = satIso;
   showMsg('');
   const entry = MANIFEST.weekends.find(w => w.sat === satIso);
   if(!entry){
     const first = MANIFEST.weekends[0].sat, last = MANIFEST.weekends[MANIFEST.weekends.length-1].sat;
-    showMsg(`この日付(${satIso}の週)のデータはまだありません。対応範囲: ${first} 〜 ${last}（毎週自動生成・拡大されます）`);
+    showMsg(`この日付(${satIso}の週)のデータはまだありません。対応範囲: ${first} 〜 ${last}（毎週自動生成・拡大されます）`, false);
     document.getElementById('grid').innerHTML = '';
     document.getElementById('chips').innerHTML = '';
     document.getElementById('rangeText').textContent = '';
     document.getElementById('countText').textContent = '';
     return;
   }
-  const res = await fetch('data/' + entry.file, {cache:'no-store'});
-  const data = await res.json();
-  render(data);
+  try{
+    const res = await fetch('data/' + entry.file, {cache:'no-store'});
+    if(!res.ok) throw new Error('fetch failed');
+    const data = await res.json();
+    render(data);
+  }catch(e){
+    showMsg('データの読み込みに失敗しました。', true);
+    document.getElementById('grid').innerHTML = '';
+  }
 }
 
 document.getElementById('updateBtn').addEventListener('click', function(){
@@ -197,8 +266,12 @@ function openCopy(){
 }
 
 (async function init(){
+  const defDate = defaultDate();
+  document.getElementById('dateInput').value = defDate;
   await loadManifest();
-  await loadWeekend(document.getElementById('dateInput').value ? saturdayOf(document.getElementById('dateInput').value) : MANIFEST.default);
+  showMeta(MANIFEST);
+  updateVisitorCount(); // 非同期・ノンブロッキング
+  await loadWeekend(saturdayOf(defDate));
 })();
 </script>
 </body>
