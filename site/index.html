@@ -164,20 +164,24 @@ async function updateVisitorCount(){
     `来訪者数: 累計 ${cumulativeStr}人 ／ 本日 ${todayCount}人`;
 }
 
-// periodStr("M/D" or "M/D〜M/D")の終了日をDateで返す。年はsatStrから推定。
-function parseEndDate(periodStr, satStr){
-  const satY = parseInt(satStr.split('-')[0]);
-  const satM = parseInt(satStr.split('-')[1]);
-  const parts = periodStr.split('〜');
-  const endPart = parts[parts.length - 1].trim();
-  const match = endPart.match(/^(\d+)\/(\d+)/);
+// periodStr("M/D" or "M/D〜M/D")の開始日・終了日をDateで返す。年はsatStrから推定。
+function parsePeriodDate(part, satY, satM){
+  const match = part.trim().match(/^(\d+)\/(\d+)/);
   if(!match) return null;
-  const m = parseInt(match[1]);
-  const d = parseInt(match[2]);
-  // 終了月がsat月より大幅に小さい場合は翌年（12月に1月イベントを見るケース）
+  const m = parseInt(match[1]), d = parseInt(match[2]);
   let year = satY;
-  if(m < satM - 6) year = satY + 1;
+  if(m < satM - 6) year = satY + 1;   // 12月に翌年1月イベントを見るケース
+  if(m > satM + 6) year = satY - 1;   // 1月に前年12月イベントを見るケース
   return new Date(year, m - 1, d);
+}
+function parseEndDate(periodStr, satStr){
+  const satY = parseInt(satStr.split('-')[0]), satM = parseInt(satStr.split('-')[1]);
+  const parts = periodStr.split('〜');
+  return parsePeriodDate(parts[parts.length - 1], satY, satM);
+}
+function parseStartDate(periodStr, satStr){
+  const satY = parseInt(satStr.split('-')[0]), satM = parseInt(satStr.split('-')[1]);
+  return parsePeriodDate(periodStr.split('〜')[0], satY, satM);
 }
 
 function render(data){
@@ -191,15 +195,22 @@ function render(data){
     `該当 ${data.events.length} 件 ／ ${Object.keys(byArea).length} エリア`;
 
   // 今週末終了 = 終了日 < 来週の土曜日
+  const satDate = new Date(data.sat + 'T00:00:00');
   const nextSat = new Date(data.sat + 'T00:00:00');
   nextSat.setDate(nextSat.getDate() + 7);
   const endingEvents = data.events.filter(ev => {
     const end = parseEndDate(ev.period, data.sat);
     return end && end < nextSat;
   });
+  // 今週開始 = 開始日 >= 今週の土曜日
+  const startingEvents = data.events.filter(ev => {
+    const start = parseStartDate(ev.period, data.sat);
+    return start && start >= satDate;
+  });
 
   let chipHtml = `<button class="chip active" data-area="__all__" style="--c:#16324f">すべて <span>${data.events.length}</span></button>`;
   chipHtml += `<button class="chip" data-area="__ending__" style="--c:#c0392b">今週末終了 <span>${endingEvents.length}</span></button>`;
+  chipHtml += `<button class="chip" data-area="__starting__" style="--c:#27ae60">今週開始 <span>${startingEvents.length}</span></button>`;
   Object.keys(byArea).forEach(area => {
     const c = AREA_COLOR[area] || '2E86AB';
     chipHtml += `<button class="chip" data-area="${area}" style="--c:#${c}">${area} <span>${byArea[area].length}</span></button>`;
@@ -217,11 +228,13 @@ function render(data){
     const c = AREA_COLOR[ev.area] || '2E86AB';
     const end = parseEndDate(ev.period, data.sat);
     const isEnding = end && end < nextSat;
+    const start = parseStartDate(ev.period, data.sat);
+    const isStarting = start && start >= satDate;
     const thumb = ev.image
       ? `<img class="thumb" src="${ev.image}" alt="" loading="lazy" onerror="this.style.display='none'">`
       : `<div class="thumb ph" style="background:#${c}"><span>${(ev.area||'?').slice(0,1)}</span></div>`;
     const src = ev.source ? `<div class="card-src">情報元: ${srcHost(ev.source)}</div>` : '';
-    return `<a class="card" data-area="${ev.area}" data-ending="${isEnding}" href="${ev.url}" target="_blank" rel="noopener">
+    return `<a class="card" data-area="${ev.area}" data-ending="${isEnding}" data-starting="${isStarting}" href="${ev.url}" target="_blank" rel="noopener">
       ${thumb}
       <div class="card-body">
         <div class="card-top">
@@ -244,6 +257,8 @@ document.getElementById('chips').addEventListener('click', function(e){
   document.querySelectorAll('#grid .card').forEach(card=>{
     if(area === '__ending__'){
       card.style.display = card.dataset.ending === 'true' ? '' : 'none';
+    } else if(area === '__starting__'){
+      card.style.display = card.dataset.starting === 'true' ? '' : 'none';
     } else {
       card.style.display = (area === '__all__' || card.dataset.area === area) ? '' : 'none';
     }
