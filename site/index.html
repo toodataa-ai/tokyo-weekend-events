@@ -164,6 +164,22 @@ async function updateVisitorCount(){
     `来訪者数: 累計 ${cumulativeStr}人 ／ 本日 ${todayCount}人`;
 }
 
+// periodStr("M/D" or "M/D〜M/D")の終了日をDateで返す。年はsatStrから推定。
+function parseEndDate(periodStr, satStr){
+  const satY = parseInt(satStr.split('-')[0]);
+  const satM = parseInt(satStr.split('-')[1]);
+  const parts = periodStr.split('〜');
+  const endPart = parts[parts.length - 1].trim();
+  const match = endPart.match(/^(\d+)\/(\d+)/);
+  if(!match) return null;
+  const m = parseInt(match[1]);
+  const d = parseInt(match[2]);
+  // 終了月がsat月より大幅に小さい場合は翌年（12月に1月イベントを見るケース）
+  let year = satY;
+  if(m < satM - 6) year = satY + 1;
+  return new Date(year, m - 1, d);
+}
+
 function render(data){
   const grid = document.getElementById('grid');
   const chips = document.getElementById('chips');
@@ -174,7 +190,16 @@ function render(data){
   document.getElementById('countText').textContent =
     `該当 ${data.events.length} 件 ／ ${Object.keys(byArea).length} エリア`;
 
+  // 今週末終了 = 終了日 < 来週の土曜日
+  const nextSat = new Date(data.sat + 'T00:00:00');
+  nextSat.setDate(nextSat.getDate() + 7);
+  const endingEvents = data.events.filter(ev => {
+    const end = parseEndDate(ev.period, data.sat);
+    return end && end < nextSat;
+  });
+
   let chipHtml = `<button class="chip active" data-area="__all__" style="--c:#16324f">すべて <span>${data.events.length}</span></button>`;
+  chipHtml += `<button class="chip" data-area="__ending__" style="--c:#c0392b">今週末終了 <span>${endingEvents.length}</span></button>`;
   Object.keys(byArea).forEach(area => {
     const c = AREA_COLOR[area] || '2E86AB';
     chipHtml += `<button class="chip" data-area="${area}" style="--c:#${c}">${area} <span>${byArea[area].length}</span></button>`;
@@ -190,11 +215,13 @@ function render(data){
   }
   grid.innerHTML = data.events.map(ev => {
     const c = AREA_COLOR[ev.area] || '2E86AB';
+    const end = parseEndDate(ev.period, data.sat);
+    const isEnding = end && end < nextSat;
     const thumb = ev.image
       ? `<img class="thumb" src="${ev.image}" alt="" loading="lazy" onerror="this.style.display='none'">`
       : `<div class="thumb ph" style="background:#${c}"><span>${(ev.area||'?').slice(0,1)}</span></div>`;
     const src = ev.source ? `<div class="card-src">情報元: ${srcHost(ev.source)}</div>` : '';
-    return `<a class="card" data-area="${ev.area}" href="${ev.url}" target="_blank" rel="noopener">
+    return `<a class="card" data-area="${ev.area}" data-ending="${isEnding}" href="${ev.url}" target="_blank" rel="noopener">
       ${thumb}
       <div class="card-body">
         <div class="card-top">
@@ -215,7 +242,11 @@ document.getElementById('chips').addEventListener('click', function(e){
   btn.classList.add('active');
   const area = btn.dataset.area;
   document.querySelectorAll('#grid .card').forEach(card=>{
-    card.style.display = (area === '__all__' || card.dataset.area === area) ? '' : 'none';
+    if(area === '__ending__'){
+      card.style.display = card.dataset.ending === 'true' ? '' : 'none';
+    } else {
+      card.style.display = (area === '__all__' || card.dataset.area === area) ? '' : 'none';
+    }
   });
 });
 
