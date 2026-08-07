@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch: {}
+  schedule:
+    - cron: '0 4 * * 1'  # 毎週月曜 04:00 UTC = 13:00 JST
 
 permissions:
   contents: read
@@ -22,6 +24,11 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build data
+        run: python build_site.py
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

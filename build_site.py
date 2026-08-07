@@ -44,7 +44,10 @@ def build_weekend_json(events, sat, sun):
         ],
     }
 
-INDEX_TEMPLATE = """<!doctype html>
+# INDEX_TEMPLATE は廃止: index.html はリポジトリの静的ファイルとして管理
+# (build_site.py はデータJSON生成のみ担当)
+
+INDEX_TEMPLATE_UNUSED = """<!doctype html>
 <html lang="ja">
 <head>
 <meta charset="utf-8">
@@ -250,7 +253,7 @@ function openCopy(){{
 </body>
 </html>"""
 
-COPY_TEMPLATE = """<!doctype html>
+COPY_TEMPLATE_UNUSED = """<!doctype html>
 <html lang="ja">
 <head>
 <meta charset="utf-8">
@@ -491,23 +494,10 @@ def main():
     with open(os.path.join(DATADIR, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False)
 
-    index_html = INDEX_TEMPLATE.format(
-        default_date=default_sat,
-        n_weeks=N_WEEKS,
-        generated=manifest["generated"],
-        area_color_json=json.dumps(AREA_COLOR, ensure_ascii=False),
-    )
-    with open(os.path.join(OUTDIR, "index.html"), "w", encoding="utf-8") as f:
-        f.write(index_html)
-
-    copy_html = COPY_TEMPLATE.format(default_date=default_sat, n_weeks=N_WEEKS)
-    with open(os.path.join(OUTDIR, "copy.html"), "w", encoding="utf-8") as f:
-        f.write(copy_html)
-
+    # index.html / copy.html はリポジトリの静的ファイルを使用（上書きしない）
     open(os.path.join(OUTDIR, ".nojekyll"), "w").close()
 
-    print(f"\nサイト出力: {os.path.join(OUTDIR, 'index.html')}")
-    print(f"コピペ用   : {os.path.join(OUTDIR, 'copy.html')}")
+    print(f"\nデータ出力: {DATADIR}")
     print(f"事前生成: {len(weekends)}週分 ({weekends[0][0]} 〜 {weekends[-1][0]})")
     if "--open" in sys.argv:
         webbrowser.open("file:///" + os.path.join(OUTDIR, "index.html").replace("\\", "/"))
