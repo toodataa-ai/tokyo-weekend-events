@@ -15,32 +15,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Probe Nerima HTTP behavior
+      - name: Inspect Nerima pagination
         run: |
           python - <<'PY'
-          import urllib.request, urllib.error
-          urls = [
-              'https://www.nerimakanko.jp/event/search.php?month=2026-10',
-              'https://www.nerimakanko.jp/event/search.php?month=2026-10&page=2',
-              'https://www.nerimakanko.jp/event/search.php?month=2026-10&mxcnt=100&page=1',
-          ]
-          header_sets = {
-              'current': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) TokyoWeekendEvents/1.0'},
-              'browser': {
-                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
-                  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                  'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8',
-                  'Referer': 'https://www.nerimakanko.jp/event/',
-              },
-          }
-          for label, headers in header_sets.items():
-              print('\nHEADERS', label)
-              for url in urls:
-                  try:
-                      req = urllib.request.Request(url, headers=headers)
-                      with urllib.request.urlopen(req, timeout=25) as r:
-                          data = r.read()
-                          print(r.status, len(data), r.geturl())
-                  except Exception as e:
-                      print('ERROR', type(e).__name__, e, url)
+          from nerimakanko import _fetch, _discover_detail_urls, _discover_pagination_urls
+          for month in ('2026-10','2026-11','2026-12'):
+              url = f'https://www.nerimakanko.jp/event/search.php?month={month}'
+              page = _fetch(url)
+              details = _discover_detail_urls(page, url)
+              pages = _discover_pagination_urls(page, url, month)
+              print(month, 'detail links on first page=', len(details))
+              print(month, 'pagination count=', len(pages))
+              for p in pages:
+                  print(' ', p)
           PY
