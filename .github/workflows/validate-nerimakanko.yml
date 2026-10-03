@@ -1,0 +1,40 @@
+name: Validate Nerima Event Source
+
+on:
+  push:
+    branches: [feature/nerimakanko-events]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Syntax check
+        run: python -m py_compile scraper.py build_site.py nerimakanko.py build_with_nerima.py
+      - name: Build with Nerima source
+        run: python build_with_nerima.py
+      - name: Verify Nerima events were generated
+        run: |
+          python - <<'PY'
+          import glob, json
+          found = []
+          for path in glob.glob('site/data/2026-*.json'):
+              if path.endswith('manifest.json'):
+                  continue
+              with open(path, encoding='utf-8') as f:
+                  data = json.load(f)
+              for ev in data.get('events', []):
+                  if ev.get('area') == '練馬区':
+                      found.append((path, ev.get('name'), ev.get('period')))
+          print('Nerima weekend entries:', len(found))
+          for row in found[:20]:
+              print(row)
+          if not found:
+              raise SystemExit('No Nerima events generated')
+          PY
