@@ -1,10 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 ねりま観光センター「とっておきの練馬」イベントカレンダー取得。
-
-既存スクレイパーとは独立して動作する追加ソース。
-月別検索ページから候補イベントを集め、各詳細ページの「日時」を解析して
-連続開催と飛び石開催を区別する。
+既存スクレイパーとは独立した追加ソース。
 """
 import datetime
 import html
@@ -19,32 +16,48 @@ MONTH_URL = BASE_URL + "/event/search.php?month={month}"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) TokyoWeekendEvents/1.0"
 
 DETAIL_HREF_RE = re.compile(
-    r'href=["\']([^"\']*detail\.php\?event_id=[^"\']+)["\']',
-    re.I,
+    r'href=["\']([^"\']*detail\.php\?event_id=[^"\']+)["\']', re.I
 )
 PAGE_HREF_RE = re.compile(r'href=["\']([^"\']+)["\']', re.I)
-
 DATE_RANGE_RE = re.compile(
     r'(?:(?P<y1>\d{4})年)?(?P<m1>\d{1,2})月(?P<d1>\d{1,2})日'
-    r'.{0,20}?[〜～~\-ー−―]+.{0,20}?'
+    r'.{0,24}?(?:[〜～~\-ー−―]+|から).{0,24}?'
     r'(?:(?P<y2>\d{4})年)?(?:(?P<m2>\d{1,2})月)?(?P<d2>\d{1,2})日',
     re.S,
 )
-DATE_RE = re.compile(
-    r'(?:(?P<y>\d{4})年)?(?P<m>\d{1,2})月(?P<d>\d{1,2})日'
+DATE_TOKEN_RE = re.compile(
+    r'(?:(?P<y>\d{4})年)?(?:(?P<m>\d{1,2})月)?(?P<d>\d{1,2})日'
 )
+_FULLWIDTH = str.maketrans("０１２３４５６７８９／", "0123456789/")
 
 
-def _fetch(url):
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=25) as r:
-        raw = r.read()
-    for enc in ("utf-8", "cp932", "euc-jp"):
+def _fetch(url, retries=2):
+    """403/429/一時的5xxは短いバックオフを入れて再試行する。"""
+    headers = {
+        "User-Agent": UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ja,en-US;q=0.8,en;q=0.6",
+        "Referer": EVENT_TOP_URL,
+    }
+    last = None
+    for attempt in range(retries + 1):
         try:
-            return raw.decode(enc)
-        except UnicodeDecodeError:
-            pass
-    return raw.decode("utf-8", "replace")
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=25) as r:
+                raw = r.read()
+            for enc in ("utf-8", "cp932", "euc-jp"):
+                try:
+                    return raw.decode(enc)
+                except UnicodeDecodeError:
+                    pass
+            return raw.decode("utf-8", "replace")
+        except Exception as e:
+            last = e
+            code = getattr(e, "code", None)
+            if attempt >= retries or code not in (403, 429, 500, 502, 503, 504):
+                raise
+            time.sleep(1.2 * (attempt + 1))
+    raise last
 
 
 def _flatten(page):
@@ -55,12 +68,9 @@ def _flatten(page):
 
 
 def _meta(page, key):
-    """meta property/name の属性順に依存せず content を取る。"""
     for tag in re.findall(r"<meta\b[^>]*>", page, re.I):
         if not re.search(
-            r'(?:property|name)\s*=\s*["\']' + re.escape(key) + r'["\']',
-            tag,
-            re.I,
+            r'(?:property|name)\s*=\s*["\']' + re.escape(key) + r'["\']', tag, re.I
         ):
             continue
         m = re.search(r'content\s*=\s*["\']([^"\']*)["\']', tag, re.I)
@@ -87,7 +97,6 @@ def _title_from_page(page):
 
 
 def _extract_fields(text):
-    """日時/場所/住所/料金/主催者/関連URL などをラベル間で切り出す。"""
     labels = ["日時", "場所", "住所", "アクセス", "料金", "主催者", "お問合せ", "申込み", "関連URL", "備考"]
     positions = []
     for label in labels:
@@ -112,28 +121,58 @@ def _make_date(year, month, day):
         return None
 
 
-def parse_event_schedule(date_text, today=None):
-    """
-    「日時」欄を ranges=[(開始,終了), ...] と dates=[単発日,...] に分解する。
+def _normalize_date_text(text):
+    text = (text or "").translate(_FULLWIDTH)
+    return re.sub(
+        r'(?<!\d)(\d{4})/(\d{1,2})/(\d{1,2})(?!\d)',
+        lambda m: f"{m.group(1)}年{m.group(2)}月{m.group(3)}日",
+        text,
+    )
 
-    飛び石開催を min〜max の連続期間にしないことが重要。
-    例: 10/1, 10/8, 10/22 ... は dates として保持する。
-    """
+
+def _parse_date_tokens(text, today):
+    """「2026年10月1日、8日、22日、11月5日」の省略日付にも対応。"""
+    dates = []
+    current_year = today.year
+    current_month = None
+    last_month = None
+    for m in DATE_TOKEN_RE.finditer(text):
+        if m.group("y"):
+            current_year = int(m.group("y"))
+        if m.group("m"):
+            month = int(m.group("m"))
+            if (
+                not m.group("y")
+                and last_month is not None
+                and last_month >= 10
+                and month <= 3
+                and month < last_month
+            ):
+                current_year += 1
+            current_month = month
+            last_month = month
+        if current_month is None:
+            continue
+        value = _make_date(current_year, current_month, int(m.group("d")))
+        if value:
+            dates.append(value)
+    return dates
+
+
+def parse_event_schedule(date_text, today=None):
+    """連続期間 ranges と、飛び石開催 dates を分離して返す。"""
     today = today or datetime.date.today()
-    text = date_text or ""
+    text = _normalize_date_text(date_text)
     ranges = []
     range_spans = []
-
     for m in DATE_RANGE_RE.finditer(text):
         y1 = int(m.group("y1") or today.year)
         mo1, d1 = int(m.group("m1")), int(m.group("d1"))
         y2 = int(m.group("y2") or y1)
         mo2 = int(m.group("m2") or mo1)
         d2 = int(m.group("d2"))
-
         if not m.group("y2") and m.group("m2") and mo1 >= 10 and mo2 <= 3 and mo2 < mo1:
             y2 += 1
-
         start = _make_date(y1, mo1, d1)
         end = _make_date(y2, mo2, d2)
         if start and end and start <= end:
@@ -143,40 +182,12 @@ def parse_event_schedule(date_text, today=None):
     masked = list(text)
     for a, b in range_spans:
         masked[a:b] = " " * (b - a)
-    rest = "".join(masked)
-
-    dates = []
-    current_year = today.year
-    last_month = None
-    for m in DATE_RE.finditer(rest):
-        if m.group("y"):
-            current_year = int(m.group("y"))
-        month, day = int(m.group("m")), int(m.group("d"))
-        if (
-            not m.group("y")
-            and last_month is not None
-            and last_month >= 10
-            and month <= 3
-            and month < last_month
-        ):
-            current_year += 1
-        value = _make_date(current_year, month, day)
-        if value:
-            dates.append(value)
-        last_month = month
-
-    return {
-        "ranges": sorted(set(ranges)),
-        "dates": sorted(set(dates)),
-    }
+    dates = _parse_date_tokens("".join(masked), today)
+    return {"ranges": sorted(set(ranges)), "dates": sorted(set(dates))}
 
 
 def _extract_related_url(page, fields):
-    m = re.search(
-        r"関連URL[\s\S]{0,1200}?href=[\"'](https?://[^\"']+)[\"']",
-        page,
-        re.I,
-    )
+    m = re.search(r"関連URL[\s\S]{0,1200}?href=[\"'](https?://[^\"']+)[\"']", page, re.I)
     if m:
         return html.unescape(m.group(1)).strip()
     raw = fields.get("関連URL")
@@ -192,16 +203,14 @@ def _extract_image(page, detail_url):
     if image:
         return urllib.parse.urljoin(detail_url, image)
     for src in re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', page, re.I):
-        low = src.lower()
-        if "event" in low or "upload" in low:
+        if "event" in src.lower() or "upload" in src.lower():
             return urllib.parse.urljoin(detail_url, html.unescape(src))
     return None
 
 
 def _canonical_detail_url(href, base_url):
     url = urllib.parse.urljoin(base_url, html.unescape(href))
-    parsed = urllib.parse.urlparse(url)
-    params = urllib.parse.parse_qs(parsed.query)
+    params = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
     event_id = (params.get("event_id") or [None])[0]
     if not event_id:
         return None
@@ -209,8 +218,7 @@ def _canonical_detail_url(href, base_url):
 
 
 def _discover_detail_urls(search_page, search_url):
-    urls = []
-    seen = set()
+    urls, seen = [], set()
     for href in DETAIL_HREF_RE.findall(search_page):
         url = _canonical_detail_url(href, search_url)
         if url and url not in seen:
@@ -220,9 +228,8 @@ def _discover_detail_urls(search_page, search_url):
 
 
 def _discover_pagination_urls(page, current_url, month):
-    """同じ month のページングURLだけを拾う。"""
-    out = []
-    seen = set()
+    """クエリ順序を正規化して同じページを二重巡回しない。"""
+    pages = set()
     for href in PAGE_HREF_RE.findall(page):
         u = urllib.parse.urljoin(current_url, html.unescape(href))
         p = urllib.parse.urlparse(u)
@@ -231,12 +238,16 @@ def _discover_pagination_urls(page, current_url, month):
         qs = urllib.parse.parse_qs(p.query)
         if (qs.get("month") or [None])[0] != month:
             continue
-        if not any(k.lower() in ("page", "p", "offset", "start") for k in qs):
+        try:
+            page_no = int((qs.get("page") or [None])[0])
+        except (TypeError, ValueError):
             continue
-        if u != current_url and u not in seen:
-            seen.add(u)
-            out.append(u)
-    return out[:10]
+        if page_no > 1:
+            pages.add(page_no)
+    return [
+        f"{BASE_URL}/event/search.php?month={urllib.parse.quote(month)}&page={page_no}"
+        for page_no in sorted(pages)
+    ]
 
 
 def _month_keys(start_date, end_date):
@@ -245,10 +256,7 @@ def _month_keys(start_date, end_date):
     out = []
     while cur <= last:
         out.append(cur.strftime("%Y-%m"))
-        if cur.month == 12:
-            cur = datetime.date(cur.year + 1, 1, 1)
-        else:
-            cur = datetime.date(cur.year, cur.month + 1, 1)
+        cur = datetime.date(cur.year + (1 if cur.month == 12 else 0), 1 if cur.month == 12 else cur.month + 1, 1)
     return out
 
 
@@ -257,7 +265,6 @@ def _detail_to_event(detail_url, today):
     title = _title_from_page(page)
     if not title:
         return None
-
     text = _flatten(page)
     fields = _extract_fields(text)
     date_text = fields.get("日時")
@@ -278,16 +285,14 @@ def _detail_to_event(detail_url, today):
     if price and len(price) > 180:
         price = price[:177] + "..."
 
-    all_boundaries = list(schedule["dates"])
+    boundaries = list(schedule["dates"])
     for start, end in schedule["ranges"]:
-        all_boundaries.extend((start, end))
-    period = (min(all_boundaries), max(all_boundaries))
-
+        boundaries.extend((start, end))
     return {
         "area": "練馬区",
         "name": title[:120],
         "url": detail_url,
-        "period": period,
+        "period": (min(boundaries), max(boundaries)),
         "ranges": schedule["ranges"],
         "dates": schedule["dates"],
         "raw": (date_text or "")[:180],
@@ -301,11 +306,8 @@ def _detail_to_event(detail_url, today):
     }
 
 
-def scrape_nerimakanko(today=None, n_weeks=12, sleep=0.15, log=print):
-    """
-    今週末から n_weeks の期間を含む月別検索を巡回し、候補イベントを取得する。
-    取得元側の障害はこの関数内で吸収し、取得できた分だけ返す。
-    """
+def scrape_nerimakanko(today=None, n_weeks=12, sleep=0.3, log=print):
+    """今週末から n_weeks の期間を含む月別検索を巡回する。"""
     today = today or datetime.date.today()
     wd = today.weekday()
     if wd == 5:
@@ -318,10 +320,8 @@ def scrape_nerimakanko(today=None, n_weeks=12, sleep=0.15, log=print):
 
     detail_urls = set()
     page_errors = 0
-
     for month in _month_keys(sat0, last_sun):
-        first_url = MONTH_URL.format(month=month)
-        pending = [first_url]
+        pending = [MONTH_URL.format(month=month)]
         visited = set()
         while pending:
             url = pending.pop(0)
@@ -332,9 +332,8 @@ def scrape_nerimakanko(today=None, n_weeks=12, sleep=0.15, log=print):
                 page = _fetch(url)
             except Exception as e:
                 page_errors += 1
-                log(f"  [警告] 練馬観光 月別検索取得失敗 {month}: {e}")
+                log(f"  [警告] 練馬観光 月別検索取得失敗 {url}: {e}")
                 continue
-
             detail_urls.update(_discover_detail_urls(page, url))
             for purl in _discover_pagination_urls(page, url, month):
                 if purl not in visited and purl not in pending:
