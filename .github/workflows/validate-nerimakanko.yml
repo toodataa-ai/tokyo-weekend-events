@@ -1,4 +1,4 @@
-name: Probe Nerima Event Source
+name: Validate Nerima Event Source
 
 on:
   push:
@@ -8,24 +8,47 @@ permissions:
   contents: read
 
 jobs:
-  probe:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Inspect Nerima pagination
+      - name: Syntax check
+        run: python -m py_compile scraper.py build_site.py nerimakanko.py build_with_nerima.py
+      - name: Build all existing sources plus Nerima
+        shell: bash
+        run: |
+          set -o pipefail
+          python build_with_nerima.py | tee /tmp/build.log
+          if grep -E '練馬観光 (月別検索取得失敗|詳細取得失敗)' /tmp/build.log; then
+            echo 'Nerima fetch errors detected'
+            exit 1
+          fi
+      - name: Verify weekend output
         run: |
           python - <<'PY'
-          from nerimakanko import _fetch, _discover_detail_urls, _discover_pagination_urls
-          for month in ('2026-10','2026-11','2026-12'):
-              url = f'https://www.nerimakanko.jp/event/search.php?month={month}'
-              page = _fetch(url)
-              details = _discover_detail_urls(page, url)
-              pages = _discover_pagination_urls(page, url, month)
-              print(month, 'detail links on first page=', len(details))
-              print(month, 'pagination count=', len(pages))
-              for p in pages:
-                  print(' ', p)
+          import glob, json
+          found = []
+          sparse_wrong = []
+          for path in glob.glob('site/data/2026-*.json'):
+              if path.endswith('manifest.json'):
+                  continue
+              with open(path, encoding='utf-8') as f:
+                  data = json.load(f)
+              for ev in data.get('events', []):
+                  if ev.get('area') == '練馬区':
+                      found.append((path, ev.get('name'), ev.get('period'), ev.get('url')))
+                      if 'event_id=e000002959' in (ev.get('url') or ''):
+                          sparse_wrong.append((path, ev.get('name')))
+          print('Nerima weekend entries:', len(found))
+          for row in found[:30]:
+              print(row[:3])
+          if len(found) < 20:
+              raise SystemExit('Too few Nerima weekend entries generated')
+          if sparse_wrong:
+              raise SystemExit(f'Sparse weekday-only event leaked into weekend output: {sparse_wrong}')
+          if not any('2026オータムフェスティバル' in (name or '') for _, name, _, _ in found):
+              raise SystemExit('Expected continuous-range event was not generated')
           PY
