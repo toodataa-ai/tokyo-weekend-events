@@ -2,9 +2,9 @@
 """
 ねりま観光センター「とっておきの練馬」イベントカレンダー取得。
 
-既存スクレイパーとは独立して動作し、取得に失敗した場合は空配列を返す。
-対象期間の土日ごとに日付検索ページを取得し、その日に該当するイベント詳細URLを集約する。
-同じイベントが複数日に該当する場合は dates に正確な開催日一覧を保持する。
+既存スクレイパーとは独立して動作する追加ソース。
+月別検索ページから候補イベントを集め、各詳細ページの「日時」を解析して
+連続開催と飛び石開催を区別する。
 """
 import datetime
 import html
@@ -15,14 +15,24 @@ import urllib.request
 
 BASE_URL = "https://www.nerimakanko.jp"
 EVENT_TOP_URL = BASE_URL + "/event/"
-SEARCH_URL = BASE_URL + "/event/search.php?day={date}"
+MONTH_URL = BASE_URL + "/event/search.php?month={month}"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) TokyoWeekendEvents/1.0"
 
 DETAIL_HREF_RE = re.compile(
-    r'href=["\']([^"\']*?/event/detail\.php\?event_id=[^"\'&<>\s]+(?:&amp;[^"\']*)?)["\']',
+    r'href=["\']([^"\']*detail\.php\?event_id=[^"\']+)["\']',
     re.I,
 )
 PAGE_HREF_RE = re.compile(r'href=["\']([^"\']+)["\']', re.I)
+
+DATE_RANGE_RE = re.compile(
+    r'(?:(?P<y1>\d{4})年)?(?P<m1>\d{1,2})月(?P<d1>\d{1,2})日'
+    r'.{0,20}?[〜～~\-ー−―]+.{0,20}?'
+    r'(?:(?P<y2>\d{4})年)?(?:(?P<m2>\d{1,2})月)?(?P<d2>\d{1,2})日',
+    re.S,
+)
+DATE_RE = re.compile(
+    r'(?:(?P<y>\d{4})年)?(?P<m>\d{1,2})月(?P<d>\d{1,2})日'
+)
 
 
 def _fetch(url):
@@ -95,6 +105,72 @@ def _extract_fields(text):
     return out
 
 
+def _make_date(year, month, day):
+    try:
+        return datetime.date(int(year), int(month), int(day))
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_event_schedule(date_text, today=None):
+    """
+    「日時」欄を ranges=[(開始,終了), ...] と dates=[単発日,...] に分解する。
+
+    飛び石開催を min〜max の連続期間にしないことが重要。
+    例: 10/1, 10/8, 10/22 ... は dates として保持する。
+    """
+    today = today or datetime.date.today()
+    text = date_text or ""
+    ranges = []
+    range_spans = []
+
+    for m in DATE_RANGE_RE.finditer(text):
+        y1 = int(m.group("y1") or today.year)
+        mo1, d1 = int(m.group("m1")), int(m.group("d1"))
+        y2 = int(m.group("y2") or y1)
+        mo2 = int(m.group("m2") or mo1)
+        d2 = int(m.group("d2"))
+
+        if not m.group("y2") and m.group("m2") and mo1 >= 10 and mo2 <= 3 and mo2 < mo1:
+            y2 += 1
+
+        start = _make_date(y1, mo1, d1)
+        end = _make_date(y2, mo2, d2)
+        if start and end and start <= end:
+            ranges.append((start, end))
+            range_spans.append(m.span())
+
+    masked = list(text)
+    for a, b in range_spans:
+        masked[a:b] = " " * (b - a)
+    rest = "".join(masked)
+
+    dates = []
+    current_year = today.year
+    last_month = None
+    for m in DATE_RE.finditer(rest):
+        if m.group("y"):
+            current_year = int(m.group("y"))
+        month, day = int(m.group("m")), int(m.group("d"))
+        if (
+            not m.group("y")
+            and last_month is not None
+            and last_month >= 10
+            and month <= 3
+            and month < last_month
+        ):
+            current_year += 1
+        value = _make_date(current_year, month, day)
+        if value:
+            dates.append(value)
+        last_month = month
+
+    return {
+        "ranges": sorted(set(ranges)),
+        "dates": sorted(set(dates)),
+    }
+
+
 def _extract_related_url(page, fields):
     m = re.search(
         r"関連URL[\s\S]{0,1200}?href=[\"'](https?://[^\"']+)[\"']",
@@ -122,36 +198,38 @@ def _extract_image(page, detail_url):
     return None
 
 
+def _canonical_detail_url(href, base_url):
+    url = urllib.parse.urljoin(base_url, html.unescape(href))
+    parsed = urllib.parse.urlparse(url)
+    params = urllib.parse.parse_qs(parsed.query)
+    event_id = (params.get("event_id") or [None])[0]
+    if not event_id:
+        return None
+    return BASE_URL + "/event/detail.php?event_id=" + urllib.parse.quote(event_id, safe="")
+
+
 def _discover_detail_urls(search_page, search_url):
     urls = []
     seen = set()
     for href in DETAIL_HREF_RE.findall(search_page):
-        href = html.unescape(href)
-        url = urllib.parse.urljoin(search_url, href)
-        url = urllib.parse.urldefrag(url)[0]
-        if url not in seen:
+        url = _canonical_detail_url(href, search_url)
+        if url and url not in seen:
             seen.add(url)
             urls.append(url)
     return urls
 
 
-def _discover_pagination_urls(page, current_url):
-    """日付検索結果が複数ページの場合に、同じ day のページングURLを拾う。"""
-    parsed = urllib.parse.urlparse(current_url)
-    current_qs = urllib.parse.parse_qs(parsed.query)
-    day = (current_qs.get("day") or [None])[0]
-    if not day:
-        return []
+def _discover_pagination_urls(page, current_url, month):
+    """同じ month のページングURLだけを拾う。"""
     out = []
     seen = set()
     for href in PAGE_HREF_RE.findall(page):
-        href = html.unescape(href)
-        u = urllib.parse.urljoin(current_url, href)
+        u = urllib.parse.urljoin(current_url, html.unescape(href))
         p = urllib.parse.urlparse(u)
         if not p.path.endswith("/event/search.php"):
             continue
         qs = urllib.parse.parse_qs(p.query)
-        if (qs.get("day") or [None])[0] != day:
+        if (qs.get("month") or [None])[0] != month:
             continue
         if not any(k.lower() in ("page", "p", "offset", "start") for k in qs):
             continue
@@ -161,20 +239,38 @@ def _discover_pagination_urls(page, current_url):
     return out[:10]
 
 
-def _detail_to_event(detail_url, dates):
+def _month_keys(start_date, end_date):
+    cur = start_date.replace(day=1)
+    last = end_date.replace(day=1)
+    out = []
+    while cur <= last:
+        out.append(cur.strftime("%Y-%m"))
+        if cur.month == 12:
+            cur = datetime.date(cur.year + 1, 1, 1)
+        else:
+            cur = datetime.date(cur.year, cur.month + 1, 1)
+    return out
+
+
+def _detail_to_event(detail_url, today):
     page = _fetch(detail_url)
     title = _title_from_page(page)
     if not title:
         return None
+
     text = _flatten(page)
     fields = _extract_fields(text)
+    date_text = fields.get("日時")
+    schedule = parse_event_schedule(date_text, today)
+    if not schedule["ranges"] and not schedule["dates"]:
+        return None
+
     description = _meta(page, "og:description") or _meta(page, "description")
     if description:
         description = description.strip()
-    date_text = fields.get("日時")
     time_text = date_text
-    if time_text and len(time_text) > 220:
-        time_text = time_text[:217] + "..."
+    if time_text and len(time_text) > 240:
+        time_text = time_text[:237] + "..."
     venue = fields.get("場所")
     if venue and len(venue) > 180:
         venue = venue[:177] + "..."
@@ -182,16 +278,19 @@ def _detail_to_event(detail_url, dates):
     if price and len(price) > 180:
         price = price[:177] + "..."
 
-    dates = sorted(set(dates))
-    if not dates:
-        return None
+    all_boundaries = list(schedule["dates"])
+    for start, end in schedule["ranges"]:
+        all_boundaries.extend((start, end))
+    period = (min(all_boundaries), max(all_boundaries))
+
     return {
         "area": "練馬区",
         "name": title[:120],
         "url": detail_url,
-        "period": (dates[0], dates[-1]),
-        "dates": dates,
-        "raw": (date_text or "")[:160],
+        "period": period,
+        "ranges": schedule["ranges"],
+        "dates": schedule["dates"],
+        "raw": (date_text or "")[:180],
         "source": EVENT_TOP_URL,
         "image": _extract_image(page, detail_url),
         "description": description,
@@ -204,7 +303,7 @@ def _detail_to_event(detail_url, dates):
 
 def scrape_nerimakanko(today=None, n_weeks=12, sleep=0.15, log=print):
     """
-    今週末から n_weeks 分の土日を日付検索し、イベントをURL単位で集約して返す。
+    今週末から n_weeks の期間を含む月別検索を巡回し、候補イベントを取得する。
     取得元側の障害はこの関数内で吸収し、取得できた分だけ返す。
     """
     today = today or datetime.date.today()
@@ -215,48 +314,49 @@ def scrape_nerimakanko(today=None, n_weeks=12, sleep=0.15, log=print):
         sat0 = today - datetime.timedelta(days=1)
     else:
         sat0 = today + datetime.timedelta(days=(5 - wd))
+    last_sun = sat0 + datetime.timedelta(days=7 * (n_weeks - 1) + 1)
 
-    date_by_url = {}
+    detail_urls = set()
     page_errors = 0
 
-    for i in range(n_weeks):
-        sat = sat0 + datetime.timedelta(days=7 * i)
-        for target in (sat, sat + datetime.timedelta(days=1)):
-            first_url = SEARCH_URL.format(date=target.isoformat())
-            pending = [first_url]
-            visited_pages = set()
-            while pending:
-                url = pending.pop(0)
-                if url in visited_pages:
-                    continue
-                visited_pages.add(url)
-                try:
-                    page = _fetch(url)
-                except Exception as e:
-                    page_errors += 1
-                    log(f"  [警告] 練馬観光 日付検索取得失敗 {target}: {e}")
-                    continue
-                for detail_url in _discover_detail_urls(page, url):
-                    date_by_url.setdefault(detail_url, set()).add(target)
-                for purl in _discover_pagination_urls(page, url):
-                    if purl not in visited_pages and purl not in pending:
-                        pending.append(purl)
-                if sleep:
-                    time.sleep(sleep)
+    for month in _month_keys(sat0, last_sun):
+        first_url = MONTH_URL.format(month=month)
+        pending = [first_url]
+        visited = set()
+        while pending:
+            url = pending.pop(0)
+            if url in visited:
+                continue
+            visited.add(url)
+            try:
+                page = _fetch(url)
+            except Exception as e:
+                page_errors += 1
+                log(f"  [警告] 練馬観光 月別検索取得失敗 {month}: {e}")
+                continue
+
+            detail_urls.update(_discover_detail_urls(page, url))
+            for purl in _discover_pagination_urls(page, url, month):
+                if purl not in visited and purl not in pending:
+                    pending.append(purl)
+            if sleep:
+                time.sleep(sleep)
 
     events = []
-    for detail_url, dates in sorted(date_by_url.items()):
+    detail_errors = 0
+    for detail_url in sorted(detail_urls):
         try:
-            event = _detail_to_event(detail_url, dates)
+            event = _detail_to_event(detail_url, today)
             if event:
                 events.append(event)
         except Exception as e:
+            detail_errors += 1
             log(f"  [警告] 練馬観光 詳細取得失敗 {detail_url}: {e}")
         if sleep:
             time.sleep(sleep)
 
     log(
-        f"  {'練馬区(観光)':10s}: 対象URL{len(date_by_url):3d}件 / "
-        f"取得{len(events):3d}件 / 日付ページ失敗{page_errors}件"
+        f"  {'練馬区(観光)':10s}: 候補{len(detail_urls):3d}件 / "
+        f"取得{len(events):3d}件 / 一覧失敗{page_errors}件 / 詳細失敗{detail_errors}件"
     )
     return events
