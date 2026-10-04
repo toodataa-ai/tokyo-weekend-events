@@ -15,40 +15,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Probe Suginami event calendar
+      - name: Probe Suginami monthly list and detail
         run: |
           python - <<'PY'
-          import html, re, urllib.request
-          url = 'https://www.city.suginami.tokyo.jp/cgi-bin/event_cal_multi/calendar.cgi?type=3&year=2026&month=10&day=4&siteid=1&keyword=&event_category=5'
-          req = urllib.request.Request(url, headers={
-              'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/141 Safari/537.36',
-              'Accept-Language':'ja,en-US;q=0.8,en;q=0.6'
-          })
-          with urllib.request.urlopen(req, timeout=30) as r:
-              raw = r.read()
-              print('STATUS', r.status, 'BYTES', len(raw), 'URL', r.geturl())
-          text = None
-          for enc in ('utf-8','cp932','euc-jp'):
-              try:
-                  text = raw.decode(enc); print('ENC', enc); break
-              except UnicodeDecodeError: pass
-          if text is None: text = raw.decode('utf-8','replace')
-          title = re.search(r'<title[^>]*>(.*?)</title>', text, re.I|re.S)
-          print('TITLE', html.unescape(re.sub('<[^>]+>',' ',title.group(1))).strip() if title else '')
-          hrefs = re.findall(r'href=["\']([^"\']+)["\']', text, re.I)
-          print('HREFS', len(hrefs))
-          for h in hrefs[:120]: print('HREF', html.unescape(h))
-          flat = html.unescape(re.sub(r'<[^>]+>',' ',text))
-          flat = re.sub(r'\s+',' ',flat)
-          print('TEXTLEN', len(flat))
-          for needle in ('祭','まつり','イベント'):
-              print('NEEDLE', needle)
-              pos = 0
-              count = 0
-              while count < 20:
-                  i = flat.find(needle, pos)
-                  if i < 0: break
-                  print('SNIP', flat[max(0,i-140):i+260])
-                  pos = i + len(needle)
-                  count += 1
+          import html, re, urllib.parse, urllib.request
+          headers = {'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/141 Safari/537.36','Accept-Language':'ja,en-US;q=0.8,en;q=0.6'}
+          def get(url):
+              req=urllib.request.Request(url,headers=headers)
+              with urllib.request.urlopen(req,timeout=30) as r: raw=r.read(); print('STATUS',r.status,len(raw),r.geturl())
+              for enc in ('utf-8','cp932','euc-jp'):
+                  try:return raw.decode(enc)
+                  except UnicodeDecodeError:pass
+              return raw.decode('utf-8','replace')
+          url='https://www.city.suginami.tokyo.jp/cgi-bin/event_cal_multi/calendar.cgi?type=2&year=2026&month=10&event_category=5&siteid=1'
+          text=get(url)
+          hrefs=re.findall(r'href=["\']([^"\']+)["\']',text,re.I)
+          ev=[urllib.parse.urljoin(url,html.unescape(h)) for h in hrefs if re.search(r'/event/\d+\.html(?:$|[?#])',h)]
+          print('EVENT LINKS',len(ev))
+          for u in ev: print('EVENT',u)
+          flat=html.unescape(re.sub(r'<[^>]+>',' ',text)); flat=re.sub(r'\s+',' ',flat)
+          print('MONTH FLAT',flat[:5000])
+          if ev:
+              detail=get(ev[0])
+              dflat=html.unescape(re.sub(r'<[^>]+>',' ',detail)); dflat=re.sub(r'\s+',' ',dflat)
+              print('DETAIL URL',ev[0])
+              print('DETAIL FLAT',dflat[:5000])
+              for tag in re.findall(r'<meta\b[^>]*>',detail,re.I):
+                  if re.search(r'(description|og:title|og:image)',tag,re.I): print('META',tag)
+              for src in re.findall(r'<img[^>]+src=["\']([^"\']+)["\']',detail,re.I)[:30]: print('IMG',src)
           PY
