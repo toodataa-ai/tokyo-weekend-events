@@ -1,4 +1,4 @@
-name: Probe Suginami Event Source
+name: Validate Suginami Festival Source
 
 on:
   push:
@@ -8,39 +8,54 @@ permissions:
   contents: read
 
 jobs:
-  probe:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Probe Suginami monthly list and detail
+      - name: Syntax and parser checks
+        run: |
+          python -m py_compile scraper.py build_site.py nerimakanko.py build_with_nerima.py suginami.py build_with_extra_sources.py
+          python - <<'PY'
+          import datetime
+          from suginami import parse_event_schedule
+          s = parse_event_schedule('2026年10月3日（土曜日） から2026年10月4日（日曜日）', datetime.date(2026,10,4))
+          assert s['ranges'] == [(datetime.date(2026,10,3), datetime.date(2026,10,4))], s
+          s = parse_event_schedule('2026年10月4日（日曜日）', datetime.date(2026,10,4))
+          assert s['dates'] == [datetime.date(2026,10,4)], s
+          PY
+      - name: Build existing sources plus Suginami
+        run: |
+          set -o pipefail
+          python build_with_extra_sources.py | tee /tmp/build.log
+          if grep -E '杉並区おまつり (月別一覧取得失敗|詳細取得失敗)' /tmp/build.log; then
+            echo 'Suginami fetch errors detected'
+            exit 1
+          fi
+      - name: Verify Suginami weekend output
         run: |
           python - <<'PY'
-          import html, re, urllib.parse, urllib.request
-          headers = {'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/141 Safari/537.36','Accept-Language':'ja,en-US;q=0.8,en;q=0.6'}
-          def get(url):
-              req=urllib.request.Request(url,headers=headers)
-              with urllib.request.urlopen(req,timeout=30) as r: raw=r.read(); print('STATUS',r.status,len(raw),r.geturl())
-              for enc in ('utf-8','cp932','euc-jp'):
-                  try:return raw.decode(enc)
-                  except UnicodeDecodeError:pass
-              return raw.decode('utf-8','replace')
-          url='https://www.city.suginami.tokyo.jp/cgi-bin/event_cal_multi/calendar.cgi?type=2&year=2026&month=10&event_category=5&siteid=1'
-          text=get(url)
-          hrefs=re.findall(r'href=["\']([^"\']+)["\']',text,re.I)
-          ev=[urllib.parse.urljoin(url,html.unescape(h)) for h in hrefs if re.search(r'/event/\d+\.html(?:$|[?#])',h)]
-          print('EVENT LINKS',len(ev))
-          for u in ev: print('EVENT',u)
-          flat=html.unescape(re.sub(r'<[^>]+>',' ',text)); flat=re.sub(r'\s+',' ',flat)
-          print('MONTH FLAT',flat[:5000])
-          if ev:
-              detail=get(ev[0])
-              dflat=html.unescape(re.sub(r'<[^>]+>',' ',detail)); dflat=re.sub(r'\s+',' ',dflat)
-              print('DETAIL URL',ev[0])
-              print('DETAIL FLAT',dflat[:5000])
-              for tag in re.findall(r'<meta\b[^>]*>',detail,re.I):
-                  if re.search(r'(description|og:title|og:image)',tag,re.I): print('META',tag)
-              for src in re.findall(r'<img[^>]+src=["\']([^"\']+)["\']',detail,re.I)[:30]: print('IMG',src)
+          import glob, json
+          found = []
+          for path in glob.glob('site/data/2026-*.json'):
+              if path.endswith('manifest.json'):
+                  continue
+              with open(path, encoding='utf-8') as f:
+                  data = json.load(f)
+              for ev in data.get('events', []):
+                  if ev.get('area') == '杉並区':
+                      found.append((path, ev.get('name'), ev.get('period'), ev.get('url')))
+          print('Suginami weekend entries:', len(found))
+          for row in found[:40]: print(row[:3])
+          if not found:
+              raise SystemExit('No Suginami festival events generated')
+          if not any('第40回高井戸センターまつり' in (name or '') for _, name, _, _ in found):
+              raise SystemExit('Expected Suginami festival was not generated')
+          with open('site/data/2026-10-10.json', encoding='utf-8') as f:
+              weekend = json.load(f)
+          wrong = [ev.get('name') for ev in weekend.get('events', []) if ev.get('area') == '杉並区' and 'Paella Summit' in (ev.get('name') or '')]
+          if wrong:
+              raise SystemExit(f'Monday-only event leaked into weekend output: {wrong}')
           PY
