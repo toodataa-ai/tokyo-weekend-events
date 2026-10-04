@@ -28,7 +28,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Build data
-        run: python build_with_nerima.py
+        run: python build_with_extra_sources.py
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
