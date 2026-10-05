@@ -1,0 +1,18 @@
+{
+  "sample": true,
+  "sat": "2026-10-10",
+  "sun": "2026-10-11",
+  "label": "10/10(土)〜10/11(日)",
+  "generated": "2026-10-06T07:00:00+09:00",
+  "coverage": {
+    "sources_checked": 0,
+    "candidate_count": 0,
+    "duplicate_removed": 0,
+    "excluded_count": 0,
+    "published_count": 0,
+    "wards": [
+      {"ward":"千代田区","status":"pending"},{"ward":"中央区","status":"pending"},{"ward":"港区","status":"pending"},{"ward":"新宿区","status":"pending"},{"ward":"文京区","status":"pending"},{"ward":"台東区","status":"pending"},{"ward":"墨田区","status":"pending"},{"ward":"江東区","status":"pending"},{"ward":"品川区","status":"pending"},{"ward":"目黒区","status":"pending"},{"ward":"大田区","status":"pending"},{"ward":"世田谷区","status":"pending"},{"ward":"渋谷区","status":"pending"},{"ward":"中野区","status":"pending"},{"ward":"杉並区","status":"pending"},{"ward":"豊島区","status":"pending"},{"ward":"北区","status":"pending"},{"ward":"荒川区","status":"pending"},{"ward":"板橋区","status":"pending"},{"ward":"練馬区","status":"pending"},{"ward":"足立区","status":"pending"},{"ward":"葛飾区","status":"pending"},{"ward":"江戸川区","status":"pending"}
+    ]
+  },
+  "events": []
+}
