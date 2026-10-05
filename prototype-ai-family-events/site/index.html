@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>東京23区 子連れイベント AIガイド</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <div class="header-row">
+    <h1>東京23区 子連れイベント AIガイド</h1>
+    <button class="navbtn" id="copyBtn">📋 コピペ用リスト</button>
+  </div>
+  <div class="controls">
+    <input type="date" id="dateInput" aria-label="対象日">
+    <input type="search" id="searchInput" placeholder="イベント名・会場・内容を検索" aria-label="キーワード検索">
+    <button id="updateBtn">この週末を表示</button>
+  </div>
+  <div class="meta" id="rangeText"></div>
+  <div class="meta" id="countText"></div>
+  <div class="msg" id="msgBox"></div>
+</header>
+<nav class="chips" id="chips"></nav>
+<section class="coverage">
+  <div class="coverage-card">
+    <div class="coverage-title">AI探索レポート</div>
+    <div class="coverage-grid">
+      <div class="metric"><b id="covWards">-</b><span>確認済み区</span></div>
+      <div class="metric"><b id="covSources">-</b><span>確認ソース</span></div>
+      <div class="metric"><b id="covCandidates">-</b><span>候補イベント</span></div>
+      <div class="metric"><b id="covPublished">-</b><span>掲載イベント</span></div>
+    </div>
+  </div>
+</section>
+<main>
+  <div class="result-head"><span id="resultLabel">読み込み中...</span><span id="generatedText"></span></div>
+  <div class="grid" id="grid"></div>
+</main>
+<footer>AI探索結果です。開催有無・料金・予約条件等は必ず公式サイトで最終確認してください。</footer>
+<script type="module">
+import {WARDS,defaultDate,saturdayOf,fmtRange,filterEvents,countsByWard,loadManifest,loadWeekend,escapeHtml,safeHttpUrl,buildCopyUrl} from './app.js';
+
+let manifest=null,currentData=null,currentWard='__all__';
+const $=id=>document.getElementById(id);
+
+function showMsg(text){ $('msgBox').textContent=text||''; $('msgBox').style.display=text?'block':'none'; }
+function currentFilters(){ return {date:$('dateInput').value,ward:currentWard,q:$('searchInput').value.trim()}; }
+function syncUrl(){ const f=currentFilters(),p=new URLSearchParams(); if(f.date)p.set('date',f.date); if(f.ward!=='__all__')p.set('ward',f.ward); if(f.q)p.set('q',f.q); history.replaceState(null,'',p.toString()?'?'+p.toString():location.pathname); }
+
+function renderCoverage(data){
+  const c=data.coverage||{}; const rows=Array.isArray(c.wards)?c.wards:[];
+  $('covWards').textContent=`${rows.filter(x=>x.status==='checked').length}/23`;
+  $('covSources').textContent=c.sources_checked ?? '-';
+  $('covCandidates').textContent=c.candidate_count ?? '-';
+  $('covPublished').textContent=c.published_count ?? data.events.length;
+  $('generatedText').textContent=data.generated ? `最終生成 ${data.generated}` : '';
+}
+
+function renderChips(data){
+  const counts=countsByWard(data.events); const chips=$('chips');
+  chips.innerHTML=[`<button class="chip ${currentWard==='__all__'?'active':''}" data-ward="__all__">すべて <span>${data.events.length}</span></button>`,
+    ...WARDS.map(w=>`<button class="chip ${currentWard===w?'active':''} ${counts[w]===0?'zero':''}" data-ward="${w}">${w} <span>${counts[w]}</span></button>`)
+  ].join('');
+}
+
+function fitClass(grade){ return grade==='A'?'fit-a':grade==='B'?'fit-b':'fit-c'; }
+function render(){
+  if(!currentData)return;
+  renderChips(currentData); renderCoverage(currentData);
+  const filtered=filterEvents(currentData.events,currentFilters());
+  $('rangeText').textContent=fmtRange(currentData.sat,currentData.sun)+' 開催中・開催';
+  $('countText').textContent=`全 ${currentData.events.length} 件 ／ 表示 ${filtered.length} 件`;
+  $('resultLabel').textContent=currentWard==='__all__'?'23区すべて':currentWard;
+  const grid=$('grid');
+  if(!filtered.length){grid.innerHTML='<p class="empty">条件に合うイベントはありません。</p>'; syncUrl(); return;}
+  grid.innerHTML=filtered.map(ev=>{
+    const href=safeHttpUrl(ev.official_url||ev.url); const img=safeHttpUrl(ev.image); const grade=ev.family_fit?.grade||'C';
+    const thumb=img?`<img class="thumb" src="${escapeHtml(img)}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'thumb ph',textContent:'${escapeHtml(ev.ward.slice(0,1))}'}))">`:`<div class="thumb ph">${escapeHtml(ev.ward.slice(0,1))}</div>`;
+    return `<article class="card">${thumb}<div class="body">
+      <div class="badges"><span class="badge">${escapeHtml(ev.ward)}</span><span class="badge ${fitClass(grade)}">子連れ ${escapeHtml(grade)}</span>${ev.indoor_outdoor?`<span class="badge">${escapeHtml(ev.indoor_outdoor)}</span>`:''}</div>
+      <div class="event-title">${href?`<a href="${escapeHtml(href)}" target="_blank" rel="noopener">${escapeHtml(ev.name||ev.url)}</a>`:escapeHtml(ev.name||ev.url)}</div>
+      <div class="event-meta">🗓 ${escapeHtml(ev.period||'')}${ev.time?'　'+escapeHtml(ev.time):''}<br>📍 ${escapeHtml(ev.venue||ev.ward)}${ev.price?`<br>💰 ${escapeHtml(ev.price)}`:''}</div>
+      ${ev.description?`<div class="desc">${escapeHtml(ev.description)}</div>`:''}
+      ${ev.family_fit?.reason?`<div class="desc"><b>AI判定:</b> ${escapeHtml(ev.family_fit.reason)}</div>`:''}
+      ${ev.source?`<div class="source">情報元: ${escapeHtml(ev.source)}</div>`:''}
+    </div></article>`;
+  }).join('');
+  syncUrl();
+}
+
+async function loadSelected(){
+  try{
+    showMsg(''); const sat=saturdayOf($('dateInput').value); const {entry,data}=await loadWeekend(manifest,sat);
+    if(!entry){showMsg('この週のデータはまだありません。');currentData=null;$('grid').innerHTML='';return;}
+    currentData=data;render();
+  }catch(e){console.error(e);showMsg('データの読み込みに失敗しました。');}
+}
+
+$('chips').addEventListener('click',e=>{const b=e.target.closest('.chip');if(!b)return;currentWard=b.dataset.ward;render();});
+$('searchInput').addEventListener('input',render);
+$('updateBtn').addEventListener('click',loadSelected);
+$('copyBtn').addEventListener('click',()=>window.open(buildCopyUrl(currentFilters()),'_blank','noopener'));
+
+(async()=>{
+  try{
+    manifest=await loadManifest(); const p=new URLSearchParams(location.search); const d=p.get('date')||defaultDate();
+    $('dateInput').value=d; const w=p.get('ward'); if(WARDS.includes(w))currentWard=w; $('searchInput').value=p.get('q')||'';
+    await loadSelected();
+  }catch(e){console.error(e);showMsg('初期データの読み込みに失敗しました。');}
+})();
+</script>
+</body></html>
