@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>コピペ用リスト｜東京23区 子連れイベント AIガイド</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body class="copy-page">
+<header>
+  <div class="header-row"><h1>📋 コピペ用リスト</h1><a class="navbtn" id="backLink" href="index.html">イベント一覧へ</a></div>
+  <div class="controls">
+    <input type="date" id="dateInput" aria-label="対象日">
+    <input type="search" id="searchInput" placeholder="イベント名・会場・内容を検索" aria-label="キーワード検索">
+    <button id="updateBtn">この週末を表示</button>
+  </div>
+  <div class="meta" id="rangeText"></div><div class="meta" id="countText"></div><div class="msg" id="msgBox"></div>
+</header>
+<nav class="chips" id="chips"></nav>
+<main>
+  <p class="tip">各項目の「コピー」で1項目だけ、カード下の「まとめてコピー」で既存サイトと同じ順序の全項目を改行区切りでコピーします。</p>
+  <div class="grid" id="grid"></div>
+</main>
+<footer>コピペ契約 v1：タイトル → 場所 → 日時 → 料金 → 説明 → 公式サイト → 情報元サイト → 画像URL（画像がある場合のみ）</footer>
+<script type="module">
+import {WARDS,defaultDate,saturdayOf,fmtRange,filterEvents,countsByWard,loadManifest,loadWeekend,escapeHtml,safeHttpUrl} from './app.js';
+import {COPY_CONTRACT_VERSION,copyFieldList,copyAllText} from './copy-contract.js';
+
+let manifest=null,currentData=null,currentWard='__all__';
+const $=id=>document.getElementById(id);
+function showMsg(text){$('msgBox').textContent=text||'';$('msgBox').style.display=text?'block':'none';}
+function filters(){return {date:$('dateInput').value,ward:currentWard,q:$('searchInput').value.trim()};}
+function syncUrl(){const f=filters(),p=new URLSearchParams();if(f.date)p.set('date',f.date);if(f.ward!=='__all__')p.set('ward',f.ward);if(f.q)p.set('q',f.q);history.replaceState(null,'',p.toString()?'?'+p.toString():location.pathname);$('backLink').href='index.html'+(p.toString()?'?'+p.toString():'');}
+
+async function writeClipboard(text){
+  if(navigator.clipboard && window.isSecureContext){await navigator.clipboard.writeText(text);return;}
+  const ta=document.createElement('textarea');ta.value=text;ta.setAttribute('readonly','');ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();
+  const ok=document.execCommand('copy');ta.remove();if(!ok)throw new Error('copy failed');
+}
+function flash(btn,label){const old=btn.textContent;btn.textContent=label;btn.classList.add('done');setTimeout(()=>{btn.textContent=old;btn.classList.remove('done');},1500);}
+window.copyOne=async(id,btn)=>{try{await writeClipboard($(id).textContent);flash(btn,'✓コピー済');}catch{showMsg('コピーに失敗しました。ブラウザのクリップボード権限をご確認ください。');}};
+window.copyAllCard=async(index,btn)=>{try{const ev=window.__visibleEvents[index];await writeClipboard(copyAllText(ev));flash(btn,'✓コピーしました');}catch{showMsg('コピーに失敗しました。ブラウザのクリップボード権限をご確認ください。');}};
+
+function renderChips(data){const counts=countsByWard(data.events);$('chips').innerHTML=[`<button class="chip ${currentWard==='__all__'?'active':''}" data-ward="__all__">すべて <span>${data.events.length}</span></button>`,...WARDS.map(w=>`<button class="chip ${currentWard===w?'active':''} ${counts[w]===0?'zero':''}" data-ward="${w}">${w} <span>${counts[w]}</span></button>`)].join('');}
+function fieldHtml(field,id){const url=field.isLink?safeHttpUrl(field.value):'';const inner=url?`<a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(field.value)}</a>`:escapeHtml(field.value);return `<div class="copy-field"><div class="field-label">${escapeHtml(field.label)}</div><div class="field-value" id="${id}">${inner}</div><button class="copy-btn" onclick="copyOne('${id}',this)">コピー</button></div>`;}
+
+function render(){
+  if(!currentData)return;renderChips(currentData);const visible=filterEvents(currentData.events,filters());window.__visibleEvents=visible;
+  $('rangeText').textContent=`${fmtRange(currentData.sat,currentData.sun)} ／ コピペ契約 v${COPY_CONTRACT_VERSION}`;$('countText').textContent=`全 ${currentData.events.length} 件 ／ コピー対象 ${visible.length} 件`;
+  const grid=$('grid');if(!visible.length){grid.innerHTML='<p class="empty">条件に合うイベントはありません。</p>';syncUrl();return;}
+  grid.innerHTML=visible.map((ev,index)=>{
+    const fields=copyFieldList(ev);const grade=ev.family_fit?.grade||'C';
+    return `<article class="copy-card"><div class="fit-note">${escapeHtml(ev.ward)} ／ 子連れ適性 ${escapeHtml(grade)}${ev.family_fit?.reason?' ／ '+escapeHtml(ev.family_fit.reason):''}</div>`+
+      fields.map((f,i)=>fieldHtml(f,`f-${index}-${i}`)).join('')+
+      `<button class="copy-all" onclick="copyAllCard(${index},this)">この項目をまとめてコピー</button></article>`;
+  }).join('');syncUrl();
+}
+async function loadSelected(){try{showMsg('');const sat=saturdayOf($('dateInput').value);const {entry,data}=await loadWeekend(manifest,sat);if(!entry){showMsg('この週のデータはまだありません。');currentData=null;$('grid').innerHTML='';return;}currentData=data;render();}catch(e){console.error(e);showMsg('データの読み込みに失敗しました。');}}
+$('chips').addEventListener('click',e=>{const b=e.target.closest('.chip');if(!b)return;currentWard=b.dataset.ward;render();});
+$('searchInput').addEventListener('input',render);$('updateBtn').addEventListener('click',loadSelected);
+(async()=>{try{manifest=await loadManifest();const p=new URLSearchParams(location.search);$('dateInput').value=p.get('date')||defaultDate();const w=p.get('ward');if(WARDS.includes(w))currentWard=w;$('searchInput').value=p.get('q')||'';await loadSelected();}catch(e){console.error(e);showMsg('初期データの読み込みに失敗しました。');}})();
+</script>
+</body></html>
