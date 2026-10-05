@@ -3,6 +3,8 @@ name: Deploy Tokyo Weekend Events
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'prototype-ai-family-events/**'
   workflow_dispatch: {}
   schedule:
     - cron: '0 4 * * 1'  # 毎週月曜 04:00 UTC = 13:00 JST
