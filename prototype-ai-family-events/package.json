@@ -1,0 +1,8 @@
+{
+  "name": "tokyo-family-events-ai",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/copy_contract.test.mjs"
+  }
+}
